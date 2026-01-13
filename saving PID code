@@ -1,0 +1,148 @@
+function sysCall_init()
+    sensorIDs = {1, 2, 3, 6, 7, 8}
+    usensors = {}
+    detect = {}
+
+    for i = 1, #sensorIDs do
+        usensors[i] = sim.getObjectHandle(
+            "Pioneer_p3dx_ultrasonicSensor" .. sensorIDs[i]
+        )
+        detect[i] = 0
+    end
+
+    motorLeft = sim.getObjectHandle("Pioneer_p3dx_leftMotor")
+    motorRight = sim.getObjectHandle("Pioneer_p3dx_rightMotor")
+
+    noDetectionDist = 0.7
+    maxDetectionDist = 0.1
+
+    followingWall = false
+    wallSide = 0           
+
+    v0 = 3
+    fineTurnSpeed = 1
+    idealWallDistance = 0.2
+
+    
+    Kp = 1.0        
+    Ki = 0.05       
+    Kd = 0.2        
+
+    prevError = 0
+    errorSum = 0
+    maxPID = 0.3    
+end
+
+
+function printSensorValues()
+    local values = {}
+    for i = 1, #detect do
+        values[i] = string.format("%.2f", detect[i])
+    end
+    print("Sensor Values: " .. table.concat(values, ", "))
+end
+
+
+function sysCall_actuation()
+    
+    for i = 1, #usensors do
+        local res, dist = sim.readProximitySensor(usensors[i])
+
+        if (res > 0) and (dist < noDetectionDist) then
+            if dist < maxDetectionDist then
+                dist = maxDetectionDist
+            end
+            detect[i] = 1 - ((dist - maxDetectionDist) /
+                            (noDetectionDist - maxDetectionDist))
+        else
+            detect[i] = 0
+        end
+    end
+
+    printSensorValues()
+
+    local vLeft = v0
+    local vRight = v0
+
+    
+    if not followingWall then
+        if detect[1] > 0 or detect[2] > 0 then
+            followingWall = true
+            wallSide = 1 
+        elseif detect[5] > 0 or detect[6] > 0 then
+            followingWall = true
+            wallSide = 2 
+        end
+    end
+
+    
+    if followingWall then
+        if wallSide == 1 then
+            if detect[1] > 0 or detect[2] > 0 then
+                vLeft = v0
+                vRight = fineTurnSpeed
+            elseif detect[3] == 0 then
+                vLeft = fineTurnSpeed
+                vRight = v0
+            end
+        elseif wallSide == 2 then
+            if detect[6] > 0 or detect[5] > 0 then
+                vLeft = fineTurnSpeed
+                vRight = v0
+            elseif detect[4] == 0 then
+                vLeft = v0
+                vRight = fineTurnSpeed
+            end
+        end
+    else
+        
+        vLeft = math.random(1, 6)
+        vRight = math.random(1, 6)
+
+        if math.random() > 0.5 then
+            vLeft = vLeft + fineTurnSpeed * 2
+        else
+            vRight = vRight + fineTurnSpeed * 2
+        end
+    end
+
+    
+    if followingWall then
+        local error = 0
+
+        if wallSide == 1 then
+            error = ((detect[1] + detect[2]) / 2) - idealWallDistance
+        elseif wallSide == 2 then
+            error = ((detect[5] + detect[6]) / 2) - idealWallDistance
+        end
+
+        
+        local P = Kp * error
+
+        
+        errorSum = errorSum + error
+        local I = Ki * errorSum
+
+       
+        local D = Kd * (error - prevError)
+
+        local pidOutput = P + I + D
+        prevError = error
+
+       
+        if pidOutput > maxPID then pidOutput = maxPID end
+        if pidOutput < -maxPID then pidOutput = -maxPID end
+
+        
+        if wallSide == 1 then
+            vLeft  = vLeft - pidOutput
+            vRight = vRight + pidOutput
+        elseif wallSide == 2 then
+            vLeft  = vLeft + pidOutput
+            vRight = vRight - pidOutput
+        end
+    end
+
+    sim.setJointTargetVelocity(motorLeft, vLeft)
+    sim.setJointTargetVelocity(motorRight, vRight)
+end
